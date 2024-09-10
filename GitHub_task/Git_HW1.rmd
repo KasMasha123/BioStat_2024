@@ -72,28 +72,42 @@ average_mean_error(c(57.96, 20.81, 8.92, 14.03, 61.02, 25.69, 21.22, 49.56, 25.6
 average_mean_error(c(76.22, 65, 19.69, 29.84, 37.18, 70.93, 64.78, 61.66, 49.03, 51.56))
 ```
 
+## Более сложная работа с данными
 
-
+### tibble вместо data.frame как формат данных
 ```{r, eval = FALSE}
-
-#df <- read_rds("numeric_data.rds")
-#summary(df)
-#psych::describe(df)
-
-
-df <- data.frame(X = c(4,5,2,3,1), Y =  c(2,1,4,3,5))
-
-ggplot(df, aes(x= X, y= Y))+
-  geom_point()
-
 tibble(`var 2` = 10:1, `var 3` = `var 1` - 10)
 tibble(var_first = 1:10, var_first = ifelse(var_first < 5, var_first + 100, var_first))
 tibble(`var 1` = 1:10, `var 2` = `var 1` * 100)
 tibble(var_first = 1:10, var_second = ifelse(var_first < 5, var_first + 100, var_first))
 tibble(var_1 = c(1:10) - 100, var_2 = "1:100")
+```
+### Выбор столбцов
 
-
+```{r, eval = FALSE}
 data %>% select(function(x) any(str_detect(x, "Жен")))
 data %>% select(`Группа`, (function(x) is.factor(x)) | where(function(x) is.numeric(x)))
+```
 
+### Мутация переменных
+Чтобы выполнить одно из заданий в разделе 6.6, проверим, работают ли 4 приведенные в нем команды. Первая команда работает корректно:
+```{r}
+data %>% mutate(across(!contains("E1"), function(x) str_c(x, " + некая строка")))
+```
+Вторая выдает ошибку:
+```{r, eval = TRUE, error = TRUE}
+
+data %>% mutate(across(!contains("E1") & !c(`Группа`, `Возраст`), function(x) x ^ 2))
+```
+Третья команда работает корректно, только если нужные столбцы сначала превращены в факторы:
+
+```{r}
+data$Пол <- factor(data$Пол)
+data$`Группа крови` <- factor(data$`Группа крови`)
+
+data %>% mutate(across(!contains("E1") & !c(`Группа`, `Возраст`) & !where(is.factor), function(x) x ^ 2), across(contains("E2"), function(x) x * 100))
+```
+Четвертая команда опять выдает ошибку
+```{r, eval = TRUE, error = TRUE}
+data %>% mutate(across(function(x) any(near(x, 0.5, tol = 0.1)), function(x) x + 1000))
 ```
