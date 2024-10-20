@@ -1,0 +1,362 @@
+---
+title: "Домашнее задание по базовой визуализации №2"
+author: "Касьянова Мария"
+date: "2024-10-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, error = FALSE, fig.width=16, fig.height=10)
+
+library(tidyverse)
+library(ggpubr)
+library(dplyr)
+```
+
+## Загрузка данных
+
+```{r}
+hogwarts <- read_csv("../data/hogwarts_2024.csv")
+hogwarts <- hogwarts |> mutate(
+  across(c(house, course, sex, wandCore, bloodStatus), ~ as.factor(.x))
+)
+hogwarts |> head()
+```
+
+
+### Пересоздание theme_custom
+
+```{r}
+theme_custom <- theme(
+    panel.background = element_rect(fill = "white"),
+    plot.title = element_text(size = 30, hjust = 0.5),
+    plot.subtitle = element_text(size = 25, hjust = 0.5),
+    strip.text = element_text(size = 20),
+    axis.text = element_text(size = 20),
+    axis.title = element_text(size = 25),
+    legend.title = element_text(size = 25),
+    legend.text = element_text(size = 20)
+  )
+
+```
+
+## Диаграммы рассеяния (скаттерплоты)
+
+### 1. Успеваемость и травология
+
+Построим скаттерплот, демонстрирующий взаимосвязь между общей оценкой ученика за год и оценкой за экзамен по травологии:
+
+```{r}
+hogwarts |> 
+  ggplot(aes(x = `result`, 
+                 y = `Herbology exam`))+
+  geom_point()+
+  theme_custom+
+  geom_smooth(se = FALSE,
+              method = "lm")
+```
+На графике можно увидеть неплохую скоррелированность суммарной оценки и оценки за травологию, причем ассоциация линейная. В целом это логичный результат, ведь скорее всего учащиеся, которые набрали высокий суммарный балл, на травологии учились так же прилежно, как и на других дисциплинах.
+
+### 2. Успеваемость и не только травология
+
+Повторим для еще 3 предметов
+
+```{r}
+hogwarts |> 
+  select(house, result, `Herbology exam`, `Divinations exam`, `Potions exam`, `Muggle studies exam`)|> 
+  pivot_longer(cols = c(`Herbology exam`, `Divinations exam`, `Potions exam`, `Muggle studies exam`),
+               names_to = "Exam") |> 
+  ggplot(aes(x = `result`, 
+             y = `value`))+
+  geom_point(aes(color = house))+
+  theme_custom+
+  facet_wrap(vars(Exam))+
+  geom_smooth(se = FALSE,
+              method = "lm")+
+  scale_color_manual(values = c("Gryffindor" = "#C50000", 
+                             "Hufflepuff" = "#ECB939", 
+                             "Ravenclaw" = "#41A6D9", 
+                             "Slytherin" = "#1F5D25"))
+
+```
+
+Видно, что почти все экзамены подчиняются схожим зависимостям, кроме зельеварения. В данный момент линия тренда наклонная, что могло бы говорить о взаимосвязи, но это из-за специфичной структуры данных, которые разбиваются на две группы. Если бы мы отделили слизеринцкв от всех остальных, мы бы увидели, что оценки за зельеварение практически не связаны с годовой оценкой (просто у всех слизеринцев за зельеварение много, а у остальных мало, в то время как общая оценка за год по крайней мере у половины слизерина наименьшая в хогвартсе)
+
+### 3. Успеваемость и слизерин
+
+Собственно, выделим слизерин в отдельную группу и увидим то, что и предполагали. На экзамене по зельеваренью слизеринцам ставили наивысшие баллы независимо от их общей успеваемости, а на всех остальных факультетах балл ниже и тоже слабо коррелирует с общей оценкой. Логичное предположение, которое напрашивается при виде данной картины: оценки за зельеварение не отражают реальные знания, выставляются в зависимости от факультета (или обучение зельеварение принципиально отличается от обучения любой другой науке и требует совершенно других навыков, но это менее вероятная гипотеза):
+
+```{r}
+hogwarts |> 
+  select(house, result, `Herbology exam`, `Divinations exam`, `Potions exam`, `Muggle studies exam`)|> 
+  pivot_longer(cols = c(`Herbology exam`, `Divinations exam`, `Potions exam`, `Muggle studies exam`),
+               names_to = "Exam") |> 
+  ggplot(aes(x = `result`, 
+             y = `value`))+
+  geom_point(aes(color = house))+
+  theme_custom+
+  facet_wrap(vars(Exam))+
+  geom_smooth(se = FALSE,
+              method = "lm",
+              aes(color = (house == "Slytherin")))+
+  scale_color_manual(values = c("Gryffindor" = "#C50000", 
+                             "Hufflepuff" = "#ECB939", 
+                             "Ravenclaw" = "#41A6D9", 
+                             "Slytherin" = "#1F5D25",
+                             "TRUE" = "red",
+                             "FALSE" = "black"))+
+  labs(color = "")
+
+```
+
+
+## Geom_col
+
+### 1. Первый семестр 
+
+Построим барплот, показывающий сумму баллов волшебников определенного происхождения
+
+
+```{r}
+hogwarts |> 
+  mutate(sem1 = sum(week_1, week_2, week_3, week_4, week_5, week_6, week_7, week_8, week_9, week_10, week_11, week_12, week_13, week_14, week_15, week_16, week_17))|> 
+  group_by(bloodStatus) |> 
+  summarise(sem_sum= sum(sem1))|> 
+  ggplot()+
+  geom_col(aes(y=sem_sum, x= bloodStatus, fill = bloodStatus))+
+  theme_custom
+```
+
+Мы видим, что суммарный балл, набранный волшебниками смешанного происхождения намного больше, чем у двух других групп. Поскольку в качестве функции использовалась сумма, такое распределение могло бы сильно зависеть от количества людей в каждой группе (возникает гипотеза, что полукровок просто намного больше)
+
+### 2. Проверка гипотезы
+
+```{r}
+hogwarts |> 
+  mutate(sem1 = sum(week_1, week_2, week_3, week_4, week_5, week_6, week_7, week_8, week_9, week_10, week_11, week_12, week_13, week_14, week_15, week_16, week_17))|> 
+  group_by(bloodStatus) |> 
+  summarise(sem_sum = sum(sem1), 
+            people_number = n())|> 
+  ggplot(aes(y = sem_sum, 
+             x= fct_reorder(bloodStatus, -sem_sum)))+
+  geom_col(aes(fill = bloodStatus))+
+  theme_custom+
+  geom_label(aes(label = people_number),
+            colour = "black",
+            size = 8)+
+  labs(x= "",
+       y = "sum of scores")
+```
+
+И правда, добавив на график информацию о количестве студентов, можно легко понять, что чем больше в группе учеников, тем больше сумма набранных ими баллов.
+
+### 3. 
+
+Добавим информацию про пол учащихся и сохраним график на устройство
+
+```{r}
+plot1 <- hogwarts |> 
+  mutate(sem1 = sum(week_1, week_2, week_3, week_4, week_5, week_6, week_7, week_8, week_9, week_10, week_11, week_12, week_13, week_14, week_15, week_16, week_17))|> 
+  group_by(bloodStatus, sex) |> 
+  summarise(sem_sum = sum(sem1), 
+            people_number = n())|> 
+  mutate(`bloodStatus and sex` = paste0(bloodStatus, " & ", sex))|> 
+  ggplot(aes(y = sem_sum, 
+             x= fct_reorder(`bloodStatus and sex`, -sem_sum)))+
+  geom_col(aes(fill = bloodStatus))+
+  theme_custom+
+  geom_label(aes(label = people_number),
+            colour = "black",
+            size = 8)+
+  labs(x= "",
+       y = "sum of scores")+
+  theme(axis.text.x = element_text(angle = 20))
+
+plot1
+  
+ggsave("first_sem.png", plot1, width = 16, height = 10, dpi = 300)
+```
+
+### 4. Функция coord.flip()
+
+Эта функция нужна для поворота графика (оси х и у меняются местами). Похожего эффекта можно добиться, если поменять местами значения, которые приравниваются переменным х и у внутри параметра aes(). Однако использование функции coord.flip() позволяет автоматически перенастроить параметры, относившиеся к осям х и у (например, пределы шкал заданные через xlim, направление заданное через scale_y_reverse и тд). Поэтому удобно применять эту функцию без переписывания остального кода. 
+
+## Разное
+
+### 1. Зельеварение vs Руны
+
+Сравним два экзамена. Для начала при помощи scatter plot:
+
+```{r}
+plot1 <- hogwarts |> 
+  ggplot() +
+  geom_point(aes(x = `Potions exam`,
+                 y = `Study of ancient runes exam`,
+                 color = house))+
+  theme_custom+
+  scale_color_manual(values = c("Gryffindor" = "#C50000", 
+                             "Hufflepuff" = "#ECB939", 
+                             "Ravenclaw" = "#41A6D9", 
+                             "Slytherin" = "#1F5D25"))
+plot1
+```
+
+Мы видим, что ассоциации между двумя экзаменами не наблюдается, (зато по-прежднему видна связь между факультетом и оценой за зельеварение)
+
+
+Теперь посмотрим на боксплоты, отражающие оценки за каждый из двух экзаменов в зависимости от факультета:
+
+```{r}
+plot2 <- hogwarts |> 
+  pivot_longer(cols = c(`Potions exam`, `Study of ancient runes exam`),
+               names_to = "Exam")|> 
+  ggplot() +
+  geom_boxplot(aes(x = house,
+                 y = value,
+                 fill = Exam))+
+  theme_custom
+
+plot2 
+```
+
+
+Видно, что распределения оценок не совпадает ни на одном из факультетов.
+
+
+Отобразим среднюю оценку за экзамены в зависимости от происхождения:
+
+```{r}
+plot3 <- hogwarts |> 
+  pivot_longer(cols = c(`Potions exam`, `Study of ancient runes exam`),
+               names_to = "Exam")|>
+  group_by(bloodStatus, Exam) |> 
+  summarise(MN= mean(value))|> 
+  ggplot(aes(y = MN, 
+             x= bloodStatus))+
+  geom_col(aes(fill = Exam),
+           position = "dodge")+
+  theme_custom
+
+plot3
+```
+Видно, что оценка за руны на зависит от происхождения, а на зельеварении все-таки различается между группами
+
+Объединим графики:
+```{r}
+ggarrange(plotlist = list(plot2, 
+                          plot3, 
+                          plot1),
+          nrow = 2,
+          ncol = 2)
+```
+
+
+### 2. Зельеварение и происхождение
+
+Посмотрим, как зависит средний балл по зельеварению от происхождения ученика. Видно, что у маглорожденных он меньше. Поскольку мы помним, что балл по этому предмету очень сильно коррелирует с факультетом, появляется гипотеза, что среди маглорожденных меньше слизеринцев, из-за чего средний балл уменьшается. Проверим это на втором графике: доля слизеринце и правда меньше, если сравнивать с полукровками и чистокровными волшебниками
+
+```{r, fig.width=16, fig.height=10}
+hogwarts$bloodStatus <- factor(hogwarts$bloodStatus, levels = c("muggle-born", "pure-blood", "half-blood"))
+
+
+plot1 <- hogwarts |> 
+  group_by(bloodStatus) |> 
+  summarise(MN= mean(`Potions exam`))|> 
+  ggplot(aes(y = MN, 
+             x= bloodStatus))+
+  geom_col(fill = "midnightblue")+
+  scale_x_discrete(labels = c("muggle-born" = "Маглорожденные", 
+                              "pure-blood" = "Чистокровные", 
+                              "half-blood" = "Полукровки"))+
+  theme_custom+
+  labs(x = "",
+       y = "Средний балл за зельеварение")
+
+plot2 <- ggplot(hogwarts)+
+  geom_bar(aes(x = bloodStatus, 
+               fill = house), 
+           position = "fill",
+           color = "midnightblue"
+           )+ 
+  theme_custom +
+  scale_x_discrete(labels = c("muggle-born" = "Маглорожденные", 
+                              "pure-blood" = "Чистокровные", 
+                              "half-blood" = "Полукровки"))+
+  scale_fill_manual(values = c("Gryffindor" = "#C50000", 
+                             "Hufflepuff" = "#ECB939", 
+                             "Ravenclaw" = "#41A6D9", 
+                             "Slytherin" = "#1F5D25"),
+                    labels = c("Gryffindor" = "Гриффиндор", 
+                             "Hufflepuff" = "Пуффендуй", 
+                             "Ravenclaw" = "Когтевран", 
+                             "Slytherin" = "Слизерин"))+
+  labs(x = "",
+       y = "Доля",
+       fill = "Факультет")+
+  theme(legend.position = "top")
+
+ggarrange(plotlist = list(plot1, 
+                          plot2),
+          ncol = 2,
+          common.legend = TRUE)
+
+```
+
+## Повторение - мать учения
+
+На графике ниже приведено распределение баллов в зависимости от факультета и пола учеников. Можно заметить, что средний балл учеников гриффендора и пуффендуя примерно одинаковый, хотя паттерн распределения баллов отличается между полами. У студентов когтеврана средний балл выше, чем на других факультетах и не различается между мальчиками и девочками, а вот слизерин - это единственный факультет, где четко видно различие полов: девочки получают средний балл, сопоставимый с когтевранцами, а мальчики заканчивают год с отрицательным результатом, из-за чего средний балл на всем факультете оказывается сопоставим с гриффендором и пуффендуем.
+
+```{r}
+hg <- summarise(group_by(hogwarts, house), MN=mean(result))
+
+hogwarts |> 
+  ggplot() +
+  geom_violin(aes(x = house,
+                 y = result,
+                 fill = house),
+              color = "grey")+
+  facet_grid(~ sex,
+             labeller = as_labeller(c("female"="Девочки", "male" = "Мальчики")))+
+  geom_boxplot(aes(x = house,
+                 y = result),
+               width = 0.1,
+               outliers = FALSE,
+               color = "grey")+
+  theme_custom+
+  scale_fill_manual(values = c("Gryffindor" = "#C50000", 
+                             "Hufflepuff" = "#ECB939", 
+                             "Ravenclaw" = "#41A6D9", 
+                             "Slytherin" = "#1F5D25"),
+                    labels = c("Gryffindor" = "Гриффиндор", 
+                             "Hufflepuff" = "Пуффендуй", 
+                             "Ravenclaw" = "Когтевран", 
+                             "Slytherin" = "Слизерин"))+
+  #scale_x_continuous(labels = NULL)+
+  labs(title = "Баллы студентов Хогвартса",
+       subtitle = "Распределение числа баллов у студентов различных факультетов Хогвартса в 2023-2024 учебном году",
+       caption = "Источник: нездоровая фантазия автора",
+       x = "",
+       y = "Количество очков",
+       fill = "Факультет")+ 
+  geom_hline(yintercept = 0, 
+             linetype = "dashed", 
+             colour = "pink",
+             size = 1)+
+  geom_point(aes(x = house, y = mean(result)),
+             shape = 23,
+             color = "black",
+             fill = "brown",
+             size = 5)+
+  scale_x_discrete(labels = NULL)+
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    plot.caption = element_text(size = 5),
+    plot.subtitle = element_text(size = 15, hjust = 0.5, color = "brown"),
+    strip.text = element_text(size = 20),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 10, face = "italic"),
+    legend.position = "inside",
+    legend.position.inside = c(0.5, 0))
+```
