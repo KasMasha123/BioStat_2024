@@ -399,7 +399,7 @@ cleaned_data %>%
   scale_fill_manual(values = brewer.pal(2, "Set1"))
 ```
 
-![](homework_notebook_02_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
+![](hw_auto_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
 
 Можно построить аналогичные графики для каждой переменной независимо, в
 таком случае переменные будет трудно сравнивать друг с другом, зато
@@ -437,7 +437,7 @@ ggarrange(plotlist = list_of_plots,
           ncol = 7)
 ```
 
-![](homework_notebook_02_files/figure-gfm/unnamed-chunk-13-1.png)<!-- -->
+![](hw_auto_files/figure-gfm/unnamed-chunk-13-1.png)<!-- -->
 
 ## Категориальные переменные
 
@@ -459,7 +459,7 @@ cleaned_data %>%
   scale_fill_manual(values = brewer.pal(2, "Set1"))
 ```
 
-![](homework_notebook_02_files/figure-gfm/unnamed-chunk-14-1.png)<!-- -->
+![](hw_auto_files/figure-gfm/unnamed-chunk-14-1.png)<!-- -->
 
 # Статистические оценки
 
@@ -534,7 +534,7 @@ ggarrange(plotlist = list_of_plots,
           ncol = 7)
 ```
 
-![](homework_notebook_02_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
+![](hw_auto_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
 
 3)  Ниже напишите, какие ещё методы проверки на нормальность вы знаете и
     какие у них есть ограничения.
@@ -610,7 +610,7 @@ cleaned_data %>%
   scale_fill_manual(values = brewer.pal(2, "Set1"))
 ```
 
-![](homework_notebook_02_files/figure-gfm/unnamed-chunk-18-1.png)<!-- -->
+![](hw_auto_files/figure-gfm/unnamed-chunk-18-1.png)<!-- -->
 
 # Далее идут **необязательные** дополнительные задания, которые могут принести вам дополнительные баллы в том числе в случае ошибок в предыдущих
 
