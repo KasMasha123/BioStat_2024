@@ -1,0 +1,536 @@
+---
+title: "Домашняя работа по продвинутой визуализации данных"
+author: "Касьянова Мария"
+date: "2024-11-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, error = FALSE, fig.width = 14)
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(factoextra)
+library(FactoMineR)
+library(ggbiplot) 
+```
+
+## 1. Предобработка данных
+
+```{r}
+theme_set(theme_minimal())
+
+birth_weight_orig <- readRDS("very_low_birthweight.RDS")
+
+birth_weight <- birth_weight_orig %>% 
+  select_if( ~ sum(is.na(.)) < 100) %>% 
+  na.omit() %>% 
+  mutate(across(c(race, inout, delivery, sex, dead, twn, vent, pneumo, pda, cld), ~ as.factor(.)))
+```
+
+## 2. Числовые переменные
+
+```{r, fig.width=16}
+birth_weight %>%
+  select(where(is.numeric))%>%
+  pivot_longer(everything())%>%
+  ggplot(aes(x = value))+
+  geom_density(fill = "lightblue")+
+  facet_wrap(~name, scales = "free")
+```
+
+
+Удалим выбросы: 
+
+```{r, fig.width=16}
+remove_outlier <- function(column) {
+  Q <- quantile(column, probs=c(.25, .75))
+  iqr <- IQR(column)
+  column <- replace(column, column < (Q[1] - 1.5*iqr) | column > (Q[2]+1.5*iqr), NA)
+  return(column)
+}
+
+bw_clean <- birth_weight %>%
+  mutate(across(where(is.numeric), ~ remove_outlier(.x)))
+
+bw_clean %>%
+  select(where(is.numeric))%>%
+  pivot_longer(everything())%>%
+  ggplot(aes(x = value))+
+  geom_density(fill = "lightblue", na.rm = T)+
+  facet_wrap(~name, scales = "free")
+```
+
+
+Раскрасим переменные в зависимости от значения inout:
+
+```{r, fig.width=16}
+bw_clean %>%
+  select(where(is.numeric) | inout)%>%
+  pivot_longer(!inout)%>%
+  ggplot(aes(x = value, fill = inout))+
+  geom_density(alpha = 0.2, na.rm = T)+
+  facet_wrap(~name, scales = "free")
+```
+
+
+## 3. lowph vs inout 
+
+```{r, fig.width=16, message=FALSE, warning=FALSE}
+bw_clean  %>% 
+  ggplot(aes(y = lowph, fill = inout))+
+  geom_boxplot()
+```
+Для сравнения средних значений переменной lowph в двух группах, объем которых не меньше 80, используем t-тест с поправкой Уэлча (функция t_test с настройками по умолчанию).
+
+```{r}
+library(rstatix)
+bw_clean %>% t_test(lowph ~ inout)%>%flextable::flextable()
+```
+
+Между группами наблюдается статистически значимое различие в уровнях pH, что может быть связано с разницей в выживаемости тех младенцев, которые родились в Дьюке, и тех, которые были транспортированы (у родившихся в Дьюке, возможно, выше как pH, так и выживаемость). Однако, чтобы проверить данное предположение, необходимо отдельно сравнить уровни выживаемости между группами, ведь различия могут быть вызваны и иными причинами.
+
+## 4. Корреляция
+
+```{r}
+library(corrplot)
+
+bw_num <- bw_clean  %>% 
+  select(where(is.numeric) & !birth & !year & !exit)%>% 
+  na.omit()
+
+bw_num%>% 
+  cor()%>% 
+  corrplot.mixed(order = 'AOE')
+
+```
+```{r}
+library(GGally)
+
+bw_num%>% 
+  ggpairs(progress = F)
+```
+
+## 5. Иерархическая кластеризация
+
+
+```{r}
+library(pheatmap)
+bw_num_scaled <- scale(bw_num)
+bw_num_dist <- dist(bw_num_scaled)
+
+res.hc <- hclust(bw_num_dist, method = "ward.D2")
+plot(res.hc)
+grp <- cutree(res.hc, k = 3)
+rect.hclust(res.hc, k = 3, border = 2:5)
+```
+
+Я бы выделила в полученной иерархической структуре три больших кластера (обведены рамками)
+
+## 6. Иерархическая кластеризация + heatmap
+
+```{r}
+pheatmap(bw_num_scaled, 
+         show_rownames = FALSE, 
+         clustering_distance_rows = bw_num_dist,
+         clustering_method = "ward.D2", 
+         cutree_rows = 3,
+         cutree_cols = length(colnames(bw_num_scaled)),
+         angle_col = 45, 
+         main = "Dendrograms for clustering rows and columns with heatmap")
+```
+
+Данный график демонстрирует нам структуру наших данных. Мы видим, что детей можно разделить на три примерно равных по объему кластера, однако они достаточно неоднородны, что может говорить о том, что на самом деле нужно выделять другое количество групп. 
+
+Если же говорить о переменных, то наиболее близкими друг к другу являются вес при рождении и гестационный возраст, а наиболее далеким от всех остальных переменных - количество дней, проведенных в больнице. Оставшиеся три переменные имеют почти что одинаковое положение в данной структуре. Это может объясняться тем, что вес и возраст положительно скоррелированы, причем коэффициент их корреляции наибольший из всех попарных корреляций. А количество дней, проведенных в больнице, отрицательно скоррелировано со всеми остальными переменными.
+
+## 7. РСА
+
+Проведем РСА анализ:
+```{r}
+library(FactoMineR)
+bw.pca <- prcomp(bw_num_scaled, scale = F)
+summary(bw.pca)
+```
+Мы видим, что первые две компоненты суммарно объясняют больше половины  дисперсии (61%), а чтобы объяснить не меньше 90%, нужно использовать 5 компонент. 
+
+```{r}
+fviz_eig(bw.pca, addlabels = T)
+```
+
+
+Наибольший вклад в первые две компоненты вносят вес и гестационный возраст (наиболее значимые для первой компоненты), а также количество тромбоцитов (наибольший влад во вторую компоненту)
+
+```{r}
+fviz_pca_var(bw.pca, col.var = "contrib")
+```
+
+
+```{r, fig.width=16}
+contrib_1 <- fviz_contrib(bw.pca, choice = "var", axes = 1) # 1
+contrib_2 <- fviz_contrib(bw.pca, choice = "var", axes = 2) # 2
+
+ggarrange(plotlist = list(contrib_1, 
+                          contrib_2),
+          ncol = 1)
+```
+
+
+## 8. biplot
+
+Построим biplot для РСА:
+```{r, fig.width=16}
+library(ggbiplot)
+
+bw <- bw_clean  %>% 
+  na.omit() %>% 
+  rowid_to_column("id")
+
+bipl <- ggbiplot::ggbiplot(bw.pca, 
+         scale=0, 
+         groups = as.factor(bw$dead), 
+         ellipse = T,
+         alpha = 0.3) +
+  theme_minimal()
+
+bipl
+```
+
+## 9. Plotly
+
+А также переведем его в "plotly":
+```{r, message=FALSE, error=FALSE, warning=FALSE, fig.width=16}
+library(plotly)
+
+bipl <-bipl+
+  geom_point(data = bipl$data, aes(text = paste0("id: ", bw$id)), alpha=0)
+
+ggplotly(bipl, tooltip = "text", width = 800)
+```
+
+## 10.Интерпретация
+
+Про проведении РСА нам удалось перейти в новую систему координат, избавившись от значительной скоррелированности в исходных переменных. При этом первые два измерения в новой системе объясняют 61% дисперсии данных (достаточно высокий показатель), а наибольший вклад в эти две новые координаты вносят вес, возраст и количество тромбоцитов. Мы визуализировали в новой плоскости совместное распределение данных и переменных, которые разбиваются на две группы: умерших и выживших. Делать вывод об ассоциации смертности с исходными переменными в данном случае не вполне корректно, так как мы видим лишь проекции многомерных данных и исходных переменных на двумерную плоскость, а значит теряем значительную часть информации.
+
+## 11. UMAP
+
+Приведем наши данные к размерности 2 с помощью UMAP и визуализируем результат:
+```{r, message=FALSE,warning=FALSE}
+library(tidymodels)
+library(embed)
+
+umap_prep <- recipe(~., data = bw_num) %>% # "техническая" строка, нужная для работы фреймворка tidymodels
+  step_normalize(all_predictors()) %>% # нормируем все колонки
+  step_umap(all_predictors()) %>%  # проводим в UMAP
+  prep() %>%  # "техническая" строка, нужная для работы фреймворка tidymodels. Мы выполняем все степы выше 
+  juice() # Финальная строка - приводим результаты UMAP к стандартизированному датасету
+
+plot_umap <- umap_prep %>%
+  ggplot(aes(UMAP1, UMAP2)) +
+  geom_point(aes(color = as.character(bw$dead)),
+             alpha = 0.7, size = 2) +
+  labs(title = "Исходный вариант", color = NULL) 
+
+plot_umap
+```
+
+
+## 12. Изменение параметров UMAP
+
+Можно заметить, что при изменение параметров программы паттерн изображения точек может кардинально измениться:
+
+```{r, message=FALSE,warning=FALSE}
+umap_prep_2 <- recipe(~., data = bw_num) %>% # "техническая" строка, нужная для работы фреймворка tidymodels
+  step_normalize(all_predictors()) %>% # нормируем все колонки
+  step_umap(all_predictors(),
+            neighbors = 5,
+            min_dist = 0.05) %>%  # проводим в UMAP
+  prep() %>%  # "техническая" строка, нужная для работы фреймворка tidymodels. Мы выполняем все степы выше 
+  juice() # Финальная строка - приводим результаты UMAP к стандартизированному датасету
+
+
+umap_prep_2 %>%
+  ggplot(aes(UMAP1, UMAP2))+
+  geom_point(aes(color = as.character(bw$dead)),
+             alpha = 0.7, size = 2) +
+  labs(title = "Вариант с измененными параметрами", color = NULL) 
+```
+
+
+## 13. Пермутация и UMAP
+
+При пермутации 50% и 100% одной из переменных меняется изображение на плоскости UMAP:
+
+```{r, message=FALSE,warning=FALSE, fig.width=16}
+bw_num_50 <-  bw_num %>%
+  slice(1:244) %>%
+  mutate(bwt = sample(bwt))%>%
+  bind_rows(bw_num %>%
+  slice(245:488))
+
+umap_prep_3  <- recipe(~., data = bw_num_50) %>% # "техническая" строка, нужная для работы фреймворка tidymodels
+  step_normalize(all_predictors()) %>% # нормируем все колонки
+  step_umap(all_predictors()) %>%  # проводим в UMAP
+  prep() %>%  # "техническая" строка, нужная для работы фреймворка tidymodels. Мы выполняем все степы выше 
+  juice() # Финальная строка - приводим результаты UMAP к стандартизированному датасету
+
+plot_umap_50 <- umap_prep_3 %>%
+  ggplot(aes(UMAP1, UMAP2)) +
+  geom_point(aes(color = as.character(bw$dead)),
+             alpha = 0.7, size = 2) +
+  labs(title = "50% пермутации", color = NULL) 
+
+
+bw_num_100 <-  bw_num%>%
+  mutate(bwt = sample(bwt))
+
+umap_prep_3  <- recipe(~., data = bw_num_100) %>% # "техническая" строка, нужная для работы фреймворка tidymodels
+  step_normalize(all_predictors()) %>% # нормируем все колонки
+  step_umap(all_predictors()) %>%  # проводим в UMAP
+  prep() %>%  # "техническая" строка, нужная для работы фреймворка tidymodels. Мы выполняем все степы выше 
+  juice() # Финальная строка - приводим результаты UMAP к стандартизированному датасету
+
+plot_umap_100 <-  umap_prep_3 %>%
+  ggplot(aes(UMAP1, UMAP2)) +
+  geom_point(aes(color = as.character(bw$dead)),
+             alpha = 0.7, size = 2) +
+  labs(title = "100% пермутации", color = NULL) 
+
+
+ggarrange(plotlist = list(plot_umap, 
+                          plot_umap_50, 
+                          plot_umap_100),
+          ncol = 3)
+```
+
+
+А при РСА анализе сокращается доля суммарной дисперсии, объяснененной несколькими первыми главными компонентами. Скорее всего это связано с тем, что вес вносил наибольший вклад в первую компоненту.
+
+```{r, message=FALSE,warning=FALSE}
+bw_50.pca <- prcomp(bw_num_50, scale = T)
+summary(bw_50.pca)
+``` 
+
+```{r, message=FALSE,warning=FALSE}
+bw_100.pca <- prcomp(bw_num_100, scale = T)
+summary(bw_100.pca)
+```
+
+
+Визуализация точек и biplot также меняются. Мы можем заметить, как с увеличением доли пермутирования сокращается вклад переменной bwt в первые две компоненты:
+
+```{r, fig.width=16}
+bipl_50 <- ggbiplot::ggbiplot(bw_50.pca, 
+         scale=0, 
+         groups = as.factor(bw$dead), 
+         ellipse = T,
+         alpha = 0.3) +
+  theme_minimal()+
+  labs(title = "50% пермутации")
+
+bipl_100 <- ggbiplot::ggbiplot(bw_100.pca, 
+         scale=0, 
+         groups = as.factor(bw$dead), 
+         ellipse = T,
+         alpha = 0.3) +
+  theme_minimal()+
+  labs(title = "100% пермутации")
+
+
+bipl <- bipl +
+  labs(title = "Исходный вариант") 
+
+ggarrange(plotlist = list(bipl, 
+                          bipl_50, 
+                          bipl_100),
+          ncol = 3,
+          common.legend = TRUE)
+```
+
+
+## 14-15. Анализ чувствительности
+
+Повторим пункты 4-6 для датасета, в котором сразу удалили все строки с пропущенными значениями. При таком подходе все колонки сохранены, но значений получается намного меньше.
+```{r}
+bw_drop_na <- birth_weight_orig %>% 
+  na.omit() %>% 
+  mutate(across(c(race, inout, twn, magsulf, meth, toc, delivery, sex, dead, vent, pneumo, pda, cld, pvh, ivh, ipe), ~ as.factor(.)))%>%
+  mutate(across(where(is.numeric), ~ remove_outlier(.x))) %>% 
+  na.omit()
+```
+
+Можно заметить, что изменились коэффициенты корреляции: какие-то увеличились, какие-то уменьшились.
+```{r}
+bw_drop_na_num <- bw_drop_na  %>% 
+  select(where(is.numeric) & !birth & !year & !exit)%>% 
+  na.omit()
+
+bw_drop_na_num%>% 
+  cor()%>% 
+  corrplot.mixed(order = 'AOE')
+``` 
+
+Иерархическая кластеризация строк глобально изменилась не сильно:
+```{r}
+bw_num_scaled <- scale(bw_drop_na_num)
+bw_num_dist <- dist(bw_num_scaled)
+
+res.hc <- hclust(bw_num_dist, method = "ward.D2")
+plot(res.hc)
+grp <- cutree(res.hc, k = 3)
+rect.hclust(res.hc, k = 3, border = 2:5)
+```
+А вот структура соотношения переменных немного другая, например, lowph больше похож на bwt чем apg1 или pltct.
+
+```{r}
+pheatmap(bw_num_scaled, 
+         show_rownames = FALSE, 
+         clustering_distance_rows = bw_num_dist,
+         clustering_method = "ward.D2", 
+         cutree_rows = 3,
+         cutree_cols = length(colnames(bw_num_scaled)),
+         angle_col = 45, 
+         main = "Dendrograms for clustering rows and columns with heatmap")
+```
+
+В РСА сильно упала доля дисперсии, объясняемая первыми компонентами (например, первые две объясняют только 54%, хотя раньше был 61%): 
+
+```{r}
+bw.pca <- prcomp(bw_num_scaled, scale = F)
+summary(bw.pca)
+```
+```{r}
+fviz_eig(bw.pca, addlabels = T)
+```
+
+А группы выживших и умерших сильнее расходятся в новых координата (возможно это связано с тем, что группы стали меньше):
+
+```{r}
+bipl_drop_na <- ggbiplot::ggbiplot(bw.pca, 
+         scale=0, 
+         groups = as.factor(bw_drop_na$dead), 
+         ellipse = T,
+         alpha = 0.3) +
+  theme_minimal()+
+  labs(title = "Датасет без удаления столбцов")
+
+
+ggarrange(plotlist = list(bipl, 
+                          bipl_drop_na),
+          ncol = 2,
+          common.legend = TRUE)
+```
+
+```{r, message=FALSE,warning=FALSE}
+umap_prep <- recipe(~., data = bw_drop_na_num) %>% # "техническая" строка, нужная для работы фреймворка tidymodels
+  step_normalize(all_predictors()) %>% # нормируем все колонки
+  step_umap(all_predictors()) %>%  # проводим в UMAP
+  prep() %>%  # "техническая" строка, нужная для работы фреймворка tidymodels. Мы выполняем все степы выше 
+  juice() # Финальная строка - приводим результаты UMAP к стандартизированному датасету
+
+plot_umap_drop_na <- umap_prep %>%
+  ggplot(aes(UMAP1, UMAP2)) +
+  geom_point(aes(color = as.character(bw_drop_na$dead)),
+             alpha = 0.7, size = 2) +
+  labs(title = "Датасет без удаления столбцов", color = NULL) 
+
+ggarrange(plotlist = list(plot_umap, 
+                          plot_umap_drop_na),
+          ncol = 2)
+```
+
+
+Теперь попробуем заменить пропущенные значения на средние:
+
+```{r}
+bw_mean_na <- birth_weight_orig %>% 
+  mutate(across(c(race, inout, twn, magsulf, meth, toc, delivery, sex, dead, vent, pneumo, pda, cld, pvh, ivh, ipe), ~ as.factor(.)))%>%
+  select_if( ~ sum(is.na(.)) < 100) %>% 
+  mutate(across(where(is.numeric), ~ as.double(.)))%>%
+  mutate(across(where(is.numeric), ~ replace_na(., mean(., na.rm=TRUE))))%>%
+  mutate(across(where(is.numeric), ~ remove_outlier(.x))) %>% 
+  na.omit()
+```
+
+
+```{r}
+bw_mean_na_num <- bw_mean_na  %>% 
+  select(where(is.numeric) & !birth & !year & !exit)%>% 
+  na.omit()
+
+bw_mean_na_num %>% 
+  cor()%>% 
+  corrplot.mixed(order = 'AOE')
+``` 
+
+Коэффициенты корреляции изменились не сильно
+
+в иерархической структуре строк один из классов начал чуть сильнее выделяться на фоне двух остальных:
+```{r}
+bw_num_scaled <- scale(bw_mean_na_num )
+bw_num_dist <- dist(bw_num_scaled)
+
+res.hc <- hclust(bw_num_dist, method = "ward.D2")
+plot(res.hc)
+grp <- cutree(res.hc, k = 3)
+rect.hclust(res.hc, k = 3, border = 2:5)
+```
+Структура и иерархия переменных (столбцов) осталась прежней: 
+```{r}
+pheatmap(bw_num_scaled, 
+         show_rownames = FALSE, 
+         clustering_distance_rows = bw_num_dist,
+         clustering_method = "ward.D2", 
+         cutree_rows = 3,
+         cutree_cols = length(colnames(bw_num_scaled)),
+         angle_col = 45, 
+         main = "Dendrograms for clustering rows and columns with heatmap")
+```
+В РСА опять же главные компоненты объясняют меньшую долю дисперсии, если сравнивать с исходным вариантом
+```{r}
+bw.pca <- prcomp(bw_num_scaled, scale = F)
+summary(bw.pca)
+```
+
+```{r}
+fviz_eig(bw.pca, addlabels = T)
+```
+
+biplot выглядит аналогично исходному варианту, только вторая компонента поменяла направление и размер единичного отрезка, поэтому график ортажен по горизонтали и точки лежат в промежутке [-3, 3], а не [-2, 2]
+
+```{r}
+bipl_mean_na <- ggbiplot::ggbiplot(bw.pca, 
+         scale=0, 
+         groups = as.factor(bw_mean_na$dead), 
+         ellipse = T,
+         alpha = 0.3) +
+  theme_minimal()+
+  labs(title = "Датасет с импутацией данных")
+
+
+ggarrange(plotlist = list(bipl, 
+                          bipl_mean_na),
+          ncol = 2,
+          common.legend = TRUE)
+```
+Результаты UMAP не совпадают, хотя можно заметить похожие паттерны взаимного расположения точек:
+
+```{r, message=FALSE,warning=FALSE}
+umap_prep <- recipe(~., data = bw_mean_na_num) %>% # "техническая" строка, нужная для работы фреймворка tidymodels
+  step_normalize(all_predictors()) %>% # нормируем все колонки
+  step_umap(all_predictors()) %>%  # проводим в UMAP
+  prep() %>%  # "техническая" строка, нужная для работы фреймворка tidymodels. Мы выполняем все степы выше 
+  juice() # Финальная строка - приводим результаты UMAP к стандартизированному датасету
+
+plot_umap_mean_na <- umap_prep %>%
+  ggplot(aes(UMAP1, UMAP2)) +
+  geom_point(aes(color = as.character(bw_mean_na$dead)),
+             alpha = 0.7, size = 2)+
+  labs(title = "Датасет с импутацией данных", color = NULL) 
+
+ggarrange(plotlist = list(plot_umap, 
+                          plot_umap_mean_na),
+          ncol = 2)
+```
