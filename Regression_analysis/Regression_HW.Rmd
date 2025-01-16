@@ -1,0 +1,301 @@
+---
+title: "Домашнее задание по регрессионному анализу"
+author: "Касьянова Мария"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, error = FALSE)
+
+library(readxl)
+library(tidyverse)
+library(gtsummary)
+library(modelsummary)
+library(GGally)
+library(broom)
+library(ggfortify)
+library(ggResidpanel)
+library(performance)
+library(lmtest)
+library(sandwich)
+library(emmeans)
+library(rstatix)
+```
+
+## 1. Постановка задачи 
+
+В рамках данного задания мы хотим изучить ассоциацию между физической активностью и уровнем гликированного гемоглобина (Hb1Ac). Так как Hb1Ac зависит в первую очередь от уровня глюкозы в крови, а при физических нагрузках этот уровень снижается, можно выдвинуть предположение об отрицательной ассоциации физической активности и уровня гликированного гемоглобина.
+
+
+```{r}
+data <- read_excel("HW_data.xlsx")
+
+data_small <- data%>%
+  select(SEQN, LBXGH, RIAGENDR, RIDRETH3, RIDAGEYR, INDFMIN2, DMDEDUC2, SMQ020, SMQ040, everything())%>%
+  rename(ID = SEQN,
+         Glycohemoglobin = LBXGH,
+         Sex = RIAGENDR,
+         Race = RIDRETH3,
+         Age = RIDAGEYR,
+         Family_income = INDFMIN2,
+         Education = DMDEDUC2,
+         #Coronary_heart_disease = MCQ160C,
+         #congestive_heart_failure = MCQ160B,
+         COPD = MCQ160O,
+         Cancer = MCQ220,
+         Diabetes = DIQ010,
+         BMI = BMXBMI)%>%
+  mutate(across(c(Sex, Race, Education, Family_income, COPD, Cancer, Diabetes), ~  as.factor(.)),
+         Sex = fct_recode(Sex, "Male" = "1",
+                          "Female" = "2"),
+         #Vigorous_activity = PAQ610 * PAD615 + PAQ655 * PAD660,
+         #Moderate_activity = PAQ625 * PAD630 + PAQ670 * PAD675 + PAQ640 * PAD645,
+         Activity = (PAQ610 * PAD615 + PAQ655 * PAD660)*2 + PAQ625 * PAD630 + PAQ670 * PAD675 + PAQ640 * PAD645,
+         #Vigorous_activity = PAD615 + PAD660,
+         #Moderate_activity = PAD630 + PAD675 + PAD645,
+         #Vigorous_activity = as.factor(ifelse(PAQ605+PAQ650 == 2, "0", "1")),
+         #Moderate_activity  = as.factor(ifelse(PAQ665+PAQ635+PAQ620 == 3, "0", "1")),
+         Sitting = PAD680,
+         Smoking = as.factor(ifelse(SMQ020 == 2, 4, SMQ040)),
+         Asthma = as.factor(ifelse(MCQ010 == 2, 3, MCQ035)),
+         Thyroid_problem = as.factor(ifelse(MCQ160M == 2, 3, MCQ170M)),
+         Cardiovascular_diseases = as.factor(ifelse(MCQ160C == 1 | MCQ160B == 1 |MCQ160E == 1 |MCQ160F == 1, 1, 2)),
+         Smoking = fct_recode(Smoking, "Every day" = "1",
+                              "Some days" = "2",
+                              "Not now" = "3",
+                              "Never" = "4"),
+         Race = fct_recode(Race, "Mexican American" = "1",
+                           "Other Hispanic" = "2",
+                           "Non-Hispanic White" = "3",
+                           "Non-Hispanic Black" = "4",
+                           "Non-Hispanic Asian" = "6",
+                           "Other" = "7"),
+
+         Family_income = fct_recode(Family_income,"$ 0 to $ 4,999" = "1",
+                                    "$ 5,000 to $ 9,999" = "2",
+                                    "$10,000 to $14,999" = "3",
+                                    "$15,000 to $19,999" = "4",
+                                    "$20,000 to $24,999" = "5",
+                                    "$25,000 to $34,999" = "6",
+                                    "$35,000 to $44,999" = "7",
+                                    "$45,000 to $54,999" = "8",
+                                    "$55,000 to $64,999" = "9",
+                                    "$65,000 to $74,999" = "10",
+                                    "$75,000 to $99,999" = "11",
+                                    "$100,000 and Over" = "12"),
+         Education = fct_recode(Education, "Less than 9th grade" = "1",
+                                "9-11th grade" = "2",
+                                "High school graduate" = "3",
+                                "College or AA degree" = "4",
+                                "College graduate" = "5")
+
+         )
+
+
+
+Demografics <- c("Sex", "Race", "Age", "Family_income", "Education", "Smoking", "BMI")
+Comorbidities <- c("Asthma", "Thyroid_problem", "Cardiovascular_diseases", "COPD", "Cancer", "Diabetes")
+
+data_small <- data_small%>%
+  mutate(across(c(Asthma, Thyroid_problem), ~ fct_recode(., "Now" = "1",
+                          "Earlier" = "2",
+                          "Never" = "3")),
+         across(c(Cardiovascular_diseases, COPD, Cancer, Diabetes), ~ fct_recode(., "Yes" = "1",
+                          "No" = "2")))%>%
+  select(all_of(c("ID", "Activity", "Glycohemoglobin", Demografics, Comorbidities)))
+
+```
+
+
+В исходных данных есть несколько показателей, характеризующих воздействие:
+
+1) Сталкиается ли респондент с интенсивной физ.нагрузкой на работе: PAQ605 (Да или нет?), PAQ610 (Cколько дней в неделю?), PAD615 (Cколько минут в день?)
+2) Сталкиается ли респондент с умеренной физ.нагрузкой на работе: PAQ620 (Да или нет?), PAQ625 (Cколько дней в неделю?), PAD630 (Cколько минут в день?)
+3) Приходится ли респонденту ходить пешком или ездить на велосипеде для перемещения: PAQ635 (Да или нет?), PAQ640 (Cколько дней в неделю?), PAD645 (Cколько минут в день?)
+4) Сталкиается ли респондент с интенсивной физ.нагрузкой в свободное время: PAQ650 (Да или нет?), PAQ655 (Cколько дней в неделю?), PAD660 (Cколько минут в день?)
+5) Сталкиается ли респондент с умеренной физ.нагрузкой в свободное время: PAQ665 (Да или нет?), PAQ670 (Cколько дней в неделю?), PAD675 (Cколько минут в день?)
+6) Сталкиается ли респондент с сидячей активностью: PAD680 (Cколько минут в день?)
+
+Я бы предпочла использовать количественные данные, то есть определять суммарное время в минутах за неделю, которое человек тратит на упражнения. Мне кажется, что то, где человек сталкивается с нагрузкой: на работе, в дороге или в свободное время, - значения не имеет. А вот интенсивность физической нагрузки может заметно влиять на результат. Будем исходить из предположения, что час умеренных нагрузок равносилен получасу интенсивных, поэтому домножим время интенсивных на два:
+
+**Activity** = PAQ625 * PAD630 + PAQ670 * PAD675 + PAQ640 * PAD645 + (PAQ610 * PAD615 + PAQ655 * PAD660) * 2
+
+Передвижение пешком или на велосипеде я отнесла к умеренной активности, а информацию о сидячей активности не стала включать никуда, так как этот показатель скорее отражает отсутствие физической нагрузки.
+
+## 2. Ковариаты
+
+Помимо основной переменной воздействия в системе есть множество ковариат:
+
+![](./DAG.png)
+
+* **Race** - конфаундер, колонка RIDRETH3
+* **Education** - конфаундер, колонка DMDEDUC2
+* **Family income** - конфаундер, колонка INDFMIN2
+* **Sex** - конфаундер, колонка RIAGENDR
+* **Age** - конфаундер, колонка RIDAGEYR
+* **Smoking** - прокси-конфаундер, получен из колонок SMQ020 и SMQ040. Категориальная переменная со значениями: "курю каждый день", "курю иногда", "не курю, но курил в прошлом" (за жизнь выкурил более 100 сигарет), "не курил никогда" (меньше 100 сигарет за жизнь). Стоит уточнить, что респонденты, выкурившие меньше 100 сигарет, встречались только среди тех, что не курит на данный момент, поэтому эту категорию разбили на две.
+* **Comorbidities** - конфаундер, разбит на несколько отдельных категориальных переменных: ХОБЛ (MCQ160O), рак (MCQ220), диабет (DIQ010), астма (MCQ010 и MCQ035 обединены в три категории: "есть сейчас", "была в прошлом", "никогда не было"), нарушения работы щитовидной железы (MCQ160M и MCQ170M обединены в три категории: "есть сейчас", "были в прошлом", "никогда не было"), нарушения со стороны сердечно-сосудистой системы, не считая повышенного давления, так как оно является коллайдером (хотя бы одно из MCQ160C, MCQ160B, MCQ160E MCQ160F)
+* **Marital status** - предшественних переменной воздействия, не будет включен в модель
+* **BMI** - медиатор, при оценке общего (total) эффекта его нельзя включать в модель, понадобится для оценки прямого эффекта, колонка BMXBMI
+* **Blood pressure** - коллайдер, не должен быть в модели
+* **Diabetic medication** - коллайдер, не должен быть в модели
+
+Наименьший набор конфаундеров, согласно Diggity, который необходимо включить в модель, чтобы избавиться от ошибки - это **Comorbidities, Race, Sex и Smoking**.
+
+## 3. Эксплораторный анализ данных
+
+Краткую информацию о всех полученных переменных можно посмотреть в таблице:
+
+```{r}
+tbl_summary(
+  data_small, include = -c(ID), 
+  type = list(all_continuous() ~ "continuous2"),
+  statistic = list(
+    all_continuous() ~ c("{N_nonmiss}", "{mean} ({sd})", "{median} ({p25}-{p75})", "{min}-{max}")
+  )) %>%
+  modify_footnote(everything() ~ NA) %>%
+  bold_labels()
+```
+
+
+Посмотрим на взаимное распределение переменной воздействия, исхода и конфаундеров.
+
+```{r, fig.width=16, fig.height=16}
+ggpairs(
+  data_small%>% dplyr::select(!c(Comorbidities, "ID", "BMI"))%>% dplyr::select(Activity, Glycohemoglobin, Age, everything()), 
+  upper = list(continuous = wrap("points", alpha = 0.5, size = 1),
+               combo = wrap("points", alpha = 0.5, size = 1),
+               disrete = "blank"),
+  lower = list(continuous = "cor",
+               discrete = "count",
+               combo = wrap("box_no_facet", outlier.size = 0.5)),
+  diag = list(continuous = "barDiag",
+              discrete = "barDiag"),
+  showStrips = TRUE, progress = FALSE) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid.minor = element_blank(),
+        strip.placement = "outside",
+        strip.background = element_rect(color = "white", fill = "#EFEBE9"),
+        strip.text = element_text(size = 11, face = "bold"))
+```
+
+
+Так как переменных довольно много все сопутствующие заболевания были вынесены в отдельный график: 
+
+```{r, fig.width=16, fig.height=16}
+
+ggpairs(
+  data_small%>% dplyr::select(Activity, Glycohemoglobin, Comorbidities), 
+  upper = list(continuous = wrap("points", alpha = 0.5, size = 1),
+               combo = wrap("points", alpha = 0.5, size = 1),
+               disrete = "blank"),
+  lower = list(continuous = "cor",
+               discrete = "count",
+               combo = wrap("box_no_facet", outlier.size = 0.5)),
+  diag = list(continuous = "barDiag",
+              discrete = "barDiag"),
+  showStrips = TRUE, progress = FALSE) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid.minor = element_blank(),
+        strip.placement = "outside",
+        strip.background = element_rect(color = "white", fill = "#EFEBE9"),
+        strip.text = element_text(size = 11, face = "bold"))
+```
+Предварительный анализ свидетельствует об отсутствии какой-либо корреляции между физической активностью и уровнем гликированного гемоглобина, то есть скорее всего модель линейной регресси будет не очень осмысленной (хотя есть надежда, что с учетом ковариат, линейная зависимость появится). Также из последнего графика мы можем сделать вывод о том, что большинство сопутсвующих заболеваний не влияют на уровень гликированного гемоглобина, поэтому я буду рассматривать из них только Diabetes и Cardiovascular_diseases (чтобы не перегружать модель ковариатами)
+
+
+## 4. Построение и диагностика моделей
+
+Сначала построим модель без ковариат: **Glycohemoglobin ~ Activity**.
+
+```{r, fig.width=16}
+no_conf_fit <- lm(Glycohemoglobin ~ Activity, data_small)
+resid_panel(no_conf_fit, plots = "R")
+```
+
+Основные проблемы, которые можно заметить на диагноститеских графиках для данной модели - это ненормальное распределение остатков (из-за чего могут быть неверные оценки значимости параметров), нарушение гомоскедастичности и наличие выбросов, влияющих на RSE. Из этого списка можно попробовать исправить гомоскедастичность, применив функцию sandwich пакета при измерении значимости коэффициентов. После нее получаются следующие результаты:
+
+
+```{r, fig.width=16}
+broom::tidy(coeftest(no_conf_fit, vcov. = vcovHC, type = "HC1"), conf.int = TRUE)%>%
+  mutate(across(where(is.numeric), ~round(., 6)))%>%flextable::flextable()
+```
+
+
+
+Формула второй модели: **Glycohemoglobin ~ Activity + Race + Sex + Smoking + Cardiovascular_diseases + Diabetes**.
+
+```{r, fig.width=16}
+conf_fit <- lm(Glycohemoglobin ~ Activity + Race + Sex + Smoking + Cardiovascular_diseases + Diabetes, data_small)
+resid_panel(conf_fit, plots = "R")
+```
+
+Для второй модели мы также видим проблемы с нормальностью и гомоскедастичностью, но которую нужно будет сделать поправку.
+
+```{r, fig.width=16}
+broom::tidy(coeftest(conf_fit, vcov. = vcovHC, type = "HC1"), conf.int = TRUE)%>%
+  mutate(across(where(is.numeric), ~round(., 6)))%>%flextable::flextable()
+```
+
+
+## 5. Оценка эффекта
+
+В двух построенных моделях эффект физической активности составил:
+
+* Без ковариат -6х10^(-6) (p-value больше 0.05, 95% ДИ: от -8х10^(-5) до 7х10^(-5))
+* С ковариатами 4х10^(-5) (p-value больше 0.05, 95% ДИ: от -1х10^(-5) до 9х10^(-5))
+
+Так как в обоих случаях p-value больше 5%, а ДИ включает в себя 0, у нас недостаточно оснований для того, чтобы отвергнуть нулевую гипотезу о ревенстве этого коэффициента 0.  То есть физическая активность не имеет статистически значимого эффекта. Клинически значимого, соответвенно, тоже не имеет.
+
+## 6. Есть ли ассоциация?
+
+В эксплораторном анализе уже было указано на то, что ассоциации между физической активностью и уровнем гликированного гемоглобина не наблюдается, но можем провести данный тест еще раз, убедившись, что нельзя отвергнуть нулевую гипотезу о равенстве коэффициента корреляции Пирсона нулю. 
+
+```{r, fig.width=16}
+data_small%>%cor_test(Activity, Glycohemoglobin)%>%flextable::flextable()
+```
+
+
+## 7. Пол - модификатор?
+
+Чтобы понять, является ли пол модификатором эффекта необходимо построить модель с измененной формулой (добавленным пересечением): **Glycohemoglobin ~ Activity + Race + Sex + Smoking + Cardiovascular_diseases + Diabetes + Activity х Sex**.
+
+```{r, fig.width=16}
+sex_fit <- lm(Glycohemoglobin ~ Activity + Race + Sex + Smoking + Cardiovascular_diseases + Diabetes + Activity*Sex, data_small)
+resid_panel(sex_fit, plots = "R")
+```
+
+В данной модели нам по-преждему нужно применять поправку на гетероскедастичность, в ее учетом получаются следующие результаты:
+
+```{r, fig.width=16}
+broom::tidy(coeftest(sex_fit, vcov. = vcovHC, type = "HC1"), conf.int = TRUE)%>%
+  mutate(across(where(is.numeric), ~round(., 6)))%>%flextable::flextable()
+```
+
+Так как p-value для коэффициента при Activity:SexFemale больше 0.05, то есть мы не можем отвергуть нулевую гипотезу о равенстве его 0, можно сделать вывод о том, что пол не является модификатором
+
+## 8. Вывод
+
+В начале работы мы выдвигали предположение о том, что физическая активность отрицательно ассоциирована с уровнем гликированного гемоглобина в крови. Однако в результате анализа данное предположение подтвердить не удалось. Обе модели, как с ковариатами, так и без, показали, что общий (total) эффект равняентся 0.
+
+## 8*. Прямой эффект
+
+Попробуем оценить не общий, а прямой эффект активности на уровень гликированного гемоглобина, добавив в модель с ковариатами медиатор (ИМТ). Полученная формула будет иметь следующий вид: **Glycohemoglobin ~ Activity + Race + Sex + Smoking + Cardiovascular_diseases + Diabetes + BMI**.
+
+```{r, fig.width=16}
+bmi_fit <- lm(Glycohemoglobin ~ Activity + Race + Sex + Smoking + Cardiovascular_diseases + Diabetes + BMI, data_small)
+resid_panel(bmi_fit, plots = "R")
+```
+
+Согласно диагностическим графикам опять присутствует гетероскедастичность, поэтому нужно использовать поправку:
+
+```{r, fig.width=16}
+broom::tidy(coeftest(bmi_fit, vcov. = vcovHC, type = "HC1"), conf.int = TRUE)%>%
+  mutate(across(where(is.numeric), ~round(., 6)))%>%flextable::flextable()
+```
+
+
+Коэффициент при Activity теперь показывает прямой эффект, но мы опять же не можем отвергнуть нулевую гипотезу о равенстве его 0. То есть прямой эффект в данном случае совпадает с общим (эффектов нет)
